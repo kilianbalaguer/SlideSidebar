@@ -20,17 +20,27 @@ public struct SlideSidebarConfig: Sendable {
     public var openThreshold: CGFloat
     /// Whether to play a haptic tap when the sidebar toggles. Default `true`.
     public var hapticsEnabled: Bool
+    /// Whether a horizontal drag can *open* the sidebar from the closed state. Default `true`.
+    /// Set `false` in apps with their own horizontal scrolling so the sidebar only opens via the
+    /// `show` binding (e.g. a button); it can still be dragged closed once open.
+    public var dragToOpen: Bool
+    /// Whether to dim the content and let a tap on it close the sidebar while open. Default `true`.
+    public var dimsContent: Bool
 
     public init(
         widthRatio: CGFloat = 0.8,
         animationDuration: Double = 0.25,
         openThreshold: CGFloat = 0.25,
-        hapticsEnabled: Bool = true
+        hapticsEnabled: Bool = true,
+        dragToOpen: Bool = true,
+        dimsContent: Bool = true
     ) {
         self.widthRatio = widthRatio
         self.animationDuration = animationDuration
         self.openThreshold = openThreshold
         self.hapticsEnabled = hapticsEnabled
+        self.dragToOpen = dragToOpen
+        self.dimsContent = dimsContent
     }
 
     public static let `default` = SlideSidebarConfig()
@@ -90,6 +100,16 @@ public struct SlideSidebar<SidebarContent: View, Content: View>: View {
                     .offset(x: sidebarOffset(geo.size.width))
                 detailView
                     .frame(width: geo.size.width)
+                    .overlay {
+                        // Dim scrim over the content while open; a tap on it closes the sidebar.
+                        if config.dimsContent && offset > 0.001 {
+                            Color.black.opacity(0.28 * offset)
+                                .ignoresSafeArea()
+                                .contentShape(Rectangle())
+                                .onTapGesture { show = false }
+                                .allowsHitTesting(offset > 0.5)
+                        }
+                    }
                     .offset(x: detailOffset(geo.size.width))
             }
             .onChange(of: show) { _ in
@@ -102,30 +122,36 @@ public struct SlideSidebar<SidebarContent: View, Content: View>: View {
                     offset = show ? 1 : 0
                 }
             }
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { value in
-                        let translationX = value.translation.width
-                        // Only begin dragging once past a small threshold.
-                        if !dragging && abs(translationX) > 15 {
-                            dragging = true
-                            startOffset = offset
-                        }
-                        if dragging {
-                            let newOffset = startOffset + (translationX / (geo.size.width / 2.5))
-                            offset = max(0, min(1, newOffset))
-                        }
-                    }
-                    .onEnded { _ in
-                        dragging = false
-                        let shouldOpen = offset > config.openThreshold
-                        withAnimation(.easeOut(duration: config.animationDuration * 0.4)) {
-                            offset = shouldOpen ? 1 : 0
-                        }
-                        show = shouldOpen
-                    }
-            )
+            // The drag is fully disabled (mask `.subviews`) when closed and drag-to-open is off, so a
+            // host app's own horizontal scrolling is never intercepted. Once open it is always active,
+            // so the sidebar can be dragged closed.
+            .gesture(dragGesture(width: geo.size.width),
+                     including: (config.dragToOpen || offset > 0.001) ? .all : .subviews)
         }
+    }
+
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                let translationX = value.translation.width
+                if !dragging && abs(translationX) > 15 {
+                    dragging = true
+                    startOffset = offset
+                }
+                if dragging {
+                    let newOffset = startOffset + (translationX / (width / 2.5))
+                    offset = max(0, min(1, newOffset))
+                }
+            }
+            .onEnded { _ in
+                guard dragging else { return }
+                dragging = false
+                let shouldOpen = offset > config.openThreshold
+                withAnimation(.easeOut(duration: config.animationDuration * 0.4)) {
+                    offset = shouldOpen ? 1 : 0
+                }
+                show = shouldOpen
+            }
     }
 }
 #endif
